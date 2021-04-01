@@ -59,6 +59,7 @@ DocumentPositionContext :: struct {
 	abort_completion: bool,
 	hint:             DocumentPositionContextHint,
 	global_lhs_stmt:  bool,
+	import_stmt:      ^ast.Import_Decl,
 }
 
 DocumentLocal :: struct {
@@ -1079,7 +1080,13 @@ make_int_ast :: proc() -> ^ast.Ident {
 
 get_package_from_node :: proc(node: ast.Node) -> string {
 	slashed, _ := filepath.to_slash(node.pos.file, context.temp_allocator);
-	ret        := strings.to_lower(path.dir(slashed, context.temp_allocator), context.temp_allocator);
+
+	when ODIN_OS == "windows" {
+		ret := strings.to_lower(path.dir(slashed, context.temp_allocator), context.temp_allocator);
+	} else {
+		ret := path.dir(slashed, context.temp_allocator);
+	}
+
 	return ret;
 }
 
@@ -2049,15 +2056,29 @@ get_document_position_context :: proc(document: ^Document, position: common.Posi
 
 	position_context.position = absolute_position;
 
+	exists_in_decl := false;
+
 	for decl in document.ast.decls {
 		if position_in_node(decl, position_context.position) {
 			get_document_position(decl, &position_context);
-
+			exists_in_decl = true;
 			switch v in decl.derived {
 			case ast.Expr_Stmt:
 				position_context.global_lhs_stmt = true;
 			}
+			break;
 		}
+	}
+
+	for import_stmt in document.ast.imports {
+		if position_in_node(import_stmt, position_context.position) {
+			position_context.import_stmt = import_stmt;
+			break;
+		}
+	}
+
+	if !exists_in_decl && position_context.import_stmt == nil {
+		position_context.abort_completion = true;
 	}
 
 	if !position_in_node(position_context.comp_lit, position_context.position) {
@@ -2148,8 +2169,8 @@ fallback_position_context_completion :: proc(document: ^Document, position: comm
 		if c == ' ' || c == '{' || c == ',' ||
 		c == '}' || c == '^' || c == ':' ||
 		c == '\n' || c == '\r' || c == '=' ||
-		c == '<' || c == '-' ||
-		c == '+' || c == '&' {
+		c == '<' || c == '-' || c == '!' ||
+		c == '+' || c == '&'|| c == '|' {
 			start = i + 1;
 			break;
 		} else if c == '>' {
@@ -2183,11 +2204,11 @@ fallback_position_context_completion :: proc(document: ^Document, position: comm
 		return;
 	}
 
+	s := string(position_context.file.src[begin_offset:end_offset]);
+
 	if !partial_arrow {
 
 		only_whitespaces := true;
-
-		s := string(position_context.file.src[begin_offset:end_offset]);
 
 		for r in s {
 			if !strings.is_space(r) {
@@ -2238,7 +2259,7 @@ fallback_position_context_completion :: proc(document: ^Document, position: comm
 		//this is most likely because of use of 'in', 'context', etc.
 		//try to go back one dot.
 
-		src_with_dot := string(position_context.file.src[0:end_offset + 1]);
+		src_with_dot := string(position_context.file.src[0:min(len(position_context.file.src), end_offset + 1)]);
 		last_dot     := strings.last_index(src_with_dot, ".");
 
 		if last_dot == -1 {

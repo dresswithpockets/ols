@@ -461,7 +461,7 @@ request_initialize :: proc (task: ^common.Task) {
 
 	config.signature_offset_support = initialize_params.capabilities.textDocument.signatureHelp.signatureInformation.parameterInformation.labelOffsetSupport;
 
-	completionTriggerCharacters := []string {".", ">", "#"};
+	completionTriggerCharacters := []string {".", ">", "#", "\"", "/", ":"};
 	signatureTriggerCharacters  := []string {"("};
 
 	token_type     := type_info_of(SemanticTokenTypes).variant.(runtime.Type_Info_Named).base.variant.(runtime.Type_Info_Enum);
@@ -526,7 +526,11 @@ request_initialize :: proc (task: ^common.Task) {
 	*/
 
 	if core, ok := config.collections["core"]; ok {
-		append(&index.indexer.built_in_packages, path.join(strings.to_lower(core, context.temp_allocator), "runtime"));
+		when ODIN_OS == "windows" {
+			append(&index.indexer.built_in_packages, path.join(strings.to_lower(core, context.temp_allocator), "runtime"));
+		} else {
+			append(&index.indexer.built_in_packages, path.join(core, "runtime"));
+		}
 	}
 
 	log.info("Finished indexing");
@@ -620,7 +624,7 @@ request_completion :: proc (task: ^common.Task) {
 	}
 
 	list: CompletionList;
-	list, ok = get_completion_list(document, completition_params.position);
+	list, ok = get_completion_list(document, completition_params.position, completition_params.context_);
 
 	if !ok {
 		handle_error(.InternalError, id, writer);
@@ -814,8 +818,6 @@ notification_did_save :: proc (task: ^common.Task) {
 
 	defer json.destroy_value(root);
 	defer free(info);
-
-	//this is temporary, but will provide dynamic indexing and is syncronized
 
 	params_object, ok := params.value.(json.Object);
 
